@@ -219,7 +219,7 @@ struct APIClient: Sendable {
     func reply(_ id: String, text: String) async throws -> ReplyResult { try await post("/api/sessions/\(id)/reply", ["text": text]) }
 
     func diff(workspace: String, path: String) async throws -> FileDiff {
-        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~/"))) ?? path
         return try await get("/api/workspaces/\(workspace)/diff?path=\(encoded)")
     }
 

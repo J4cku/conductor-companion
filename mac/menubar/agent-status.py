@@ -493,7 +493,8 @@ def tailscale_state():
     """'off' (signed out or not running), 'ready' (signed in, not serving us) or 'serving'."""
     def look():
         def run(*args):
-            return subprocess.run([TAILSCALE, *args], capture_output=True, text=True, timeout=5).stdout or '{}'
+            return subprocess.run([TAILSCALE, *args], capture_output=True, text=True, timeout=5,
+                                  env={**os.environ, 'TAILSCALE_BE_CLI': '1'}).stdout or '{}'  # else it hangs outside a shell
         try:
             status, serve = json.loads(run('status', '--json')), run('serve', 'status', '--json')
         except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
@@ -548,7 +549,7 @@ def phone_command(arg, now):
             port = str(phone_config()['port'])
             try:
                 done = subprocess.run([TAILSCALE, 'serve', '--https=443', 'off'] if state == 'serving' else [TAILSCALE, 'serve', '--bg', port],
-                                      capture_output=True, text=True, timeout=30)
+                                      capture_output=True, text=True, timeout=30, env={**os.environ, 'TAILSCALE_BE_CLI': '1'})
                 consent = re.search(r'https://login\.tailscale\.com/\S+', done.stdout + done.stderr)
             except subprocess.TimeoutExpired as waited:  # serve waits while the tailnet's HTTPS certificates are switched on
                 consent = re.search(r'https://login\.tailscale\.com/\S+', str(waited.stdout or '') + str(waited.stderr or ''))
