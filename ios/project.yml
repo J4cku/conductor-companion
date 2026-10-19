@@ -20,6 +20,7 @@ targets:
       - path: Shared
     dependencies:
       - target: AgentsWidgets
+      - target: AgentsNotifications
     entitlements:
       path: Agents/Agents.entitlements
       properties:
@@ -48,4 +49,14 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.j4cku.agents.widgets
         INFOPLIST_FILE: AgentsWidgets/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+  AgentsNotifications:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: AgentsNotifications
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.j4cku.agents.notifications
+        INFOPLIST_FILE: AgentsNotifications/Info.plist
         TARGETED_DEVICE_FAMILY: "1,2"

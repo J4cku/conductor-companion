@@ -43,9 +43,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard let session = response.notification.request.content.userInfo["sessionId"] as? String else { return }
-        if let text = (response as? UNTextInputNotificationResponse)?.userText.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-            _ = try? await SharedStore.currentMac?.client.reply(session, text: text)
+        let info = response.notification.request.content.userInfo
+        guard let session = info["sessionId"] as? String else { return }
+        var answer = (response as? UNTextInputNotificationResponse)?.userText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if response.actionIdentifier.hasPrefix("OPTION_"), let index = Int(response.actionIdentifier.dropFirst(7)),
+           let options = info["options"] as? [String], options.indices.contains(index) {
+            answer = options[index]
+        }
+        if let answer, !answer.isEmpty {
+            _ = try? await SharedStore.currentMac?.client.reply(session, text: answer)
             return
         }
         await MainActor.run { model?.pendingSession = session }
@@ -92,6 +98,9 @@ struct RootView: View {
                 tab = ["workspaces": .workspaces, "mac": .mac][arguments[index + 1]] ?? .active
             }
             if arguments.contains("-unlocked") { model.locked = false }
+            if arguments.contains("-quietNotifications") {  // provisional: no prompt, so simctl push works unattended
+                _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge, .provisional])
+            }
             if let index = arguments.firstIndex(of: "-session"), index + 1 < arguments.count {
                 model.pendingSession = arguments[index + 1]
             }
