@@ -85,6 +85,7 @@ struct RootView: View {
             }
         }
         .animation(.smooth, value: model.locked)
+        .sensoryFeedback(trigger: model.needsYou) { before, after in after > before ? .warning : nil }
         .onOpenURL { url in
             Task { linkProblem = await model.open(url) }
         }
