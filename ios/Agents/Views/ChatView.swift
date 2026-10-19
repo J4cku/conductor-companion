@@ -10,6 +10,7 @@ struct ChatView: View {
 
     @State private var transcript: Transcript?
     @State private var problem: String?
+    @State private var offline = false
     @State private var draft = ""
     @State private var sending = false
     @State private var sent = 0
@@ -97,7 +98,7 @@ struct ChatView: View {
     private var subtitle: String {
         guard let session = transcript?.session else { return "" }
         let label = model.snapshot?.theme.label(session.state) ?? session.state.rawValue
-        return [session.place == session.name ? nil : session.place, session.unit, label, money(session.cost)].compactMap { $0 }.joined(separator: " · ")
+        return [offline ? "Offline" : nil, session.place == session.name ? nil : session.place, session.unit, label, money(session.cost)].compactMap { $0 }.joined(separator: " · ")
     }
 
     private var question: Question? { transcript?.held?.question }
@@ -227,12 +228,14 @@ struct ChatView: View {
     /// The live stream when the Mac offers one, polling otherwise.
     private func follow() async {
         guard let client = model.client else { return }
+        if transcript == nil, let cached = TranscriptCache.read(sessionID) { transcript = cached }
         await load()
         while !Task.isCancelled {
             do {
                 for try await (event, payload) in client.events(session: sessionID) where event == "transcript" {
                     if let next = try? JSONDecoder().decode(Transcript.self, from: payload), next != transcript {
                         withAnimation(.snappy) { transcript = next }
+                        TranscriptCache.write(next, for: sessionID)
                     }
                 }
             } catch {}
@@ -245,10 +248,15 @@ struct ChatView: View {
         guard let client = model.client else { return }
         do {
             let next = try await client.transcript(sessionID)
-            if next != transcript { withAnimation(.snappy) { transcript = next } }
+            if next != transcript {
+                withAnimation(.snappy) { transcript = next }
+                TranscriptCache.write(next, for: sessionID)
+            }
             problem = nil
+            offline = false
         } catch {
-            problem = error.localizedDescription
+            if transcript == nil { problem = error.localizedDescription }
+            offline = true
         }
     }
 
@@ -475,5 +483,23 @@ struct QuestionCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular.tint(Color.orange.opacity(0.18)), in: .rect(cornerRadius: 22))
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// The last transcript of each chat, so a chat opens instantly and still reads when the Mac is out of reach.
+enum TranscriptCache {
+    private static let folder = URL.cachesDirectory.appending(path: "transcripts", directoryHint: .isDirectory)
+
+    static func read(_ session: String) -> Transcript? {
+        (try? Data(contentsOf: file(session))).flatMap { try? JSONDecoder().decode(Transcript.self, from: $0) }
+    }
+
+    static func write(_ transcript: Transcript, for session: String) {
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? JSONEncoder().encode(transcript).write(to: file(session), options: [.atomic, .completeFileProtection])
+    }
+
+    private static func file(_ session: String) -> URL {
+        folder.appending(path: session.filter { $0.isLetter || $0.isNumber || $0 == "-" } + ".json")
     }
 }
