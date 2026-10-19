@@ -1,13 +1,58 @@
+import AppIntents
 import SwiftUI
+import UIKit
+import UserNotifications
 
 @main
 struct AgentsApp: App {
+    @UIApplicationDelegateAdaptor private var delegate: AppDelegate
     @State private var model = AppModel()
 
     var body: some Scene {
         WindowGroup {
-            RootView().environment(model)
+            RootView()
+                .environment(model)
+                .tint(model.accent)
+                .onAppear { delegate.model = model }
         }
+    }
+}
+
+/// Push registration, and notification actions: reply from the lock screen, or tap to open the chat.
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    var model: AppModel?
+
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        let open = UNNotificationAction(identifier: "OPEN", title: "Open", options: [.foreground])
+        let reply = UNTextInputNotificationAction(identifier: "REPLY", title: "Reply", textInputButtonTitle: "Send", textInputPlaceholder: "Message the agent")
+        let answer = UNTextInputNotificationAction(identifier: "REPLY", title: "Answer", textInputButtonTitle: "Send", textInputPlaceholder: "Your answer")
+        center.setNotificationCategories([
+            UNNotificationCategory(identifier: "AGENT_REPLY", actions: [reply, open], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "AGENT_QUESTION", actions: [answer, open], intentIdentifiers: []),
+        ])
+        Task { @MainActor in
+            if await center.notificationSettings().authorizationStatus == .authorized { application.registerForRemoteNotifications() }
+        }
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        model?.didRegister(deviceToken: deviceToken)
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        guard let session = response.notification.request.content.userInfo["sessionId"] as? String else { return }
+        if let text = (response as? UNTextInputNotificationResponse)?.userText.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            _ = try? await SharedStore.currentMac?.client.reply(session, text: text)
+            return
+        }
+        await MainActor.run { model?.pendingSession = session }
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
     }
 }
 
@@ -28,6 +73,12 @@ struct RootView: View {
                 tabs
             }
         }
+        .overlay {
+            if model.mac != nil, model.locked || (phase != .active && model.requireFaceID) {
+                LockView().transition(.opacity)
+            }
+        }
+        .animation(.smooth, value: model.locked)
         .onOpenURL { url in
             Task { linkProblem = await model.open(url) }
         }
@@ -40,13 +91,27 @@ struct RootView: View {
             if let index = arguments.firstIndex(of: "-tab"), index + 1 < arguments.count {
                 tab = ["workspaces": .workspaces, "mac": .mac][arguments[index + 1]] ?? .active
             }
+            if arguments.contains("-unlocked") { model.locked = false }
+            if let index = arguments.firstIndex(of: "-session"), index + 1 < arguments.count {
+                model.pendingSession = arguments[index + 1]
+            }
         }
         #endif
-        .onChange(of: model.pendingSession) { _, session in
+        .task { model.observePushToStart() }
+        .onChange(of: model.pendingSession, initial: true) { _, session in
             guard let session else { return }
             tab = .active
             activePath = [session]
             model.pendingSession = nil
+        }
+        .onChange(of: phase, initial: true) { _, phase in
+            switch phase {
+            case .background: model.backgrounded()
+            case .active:
+                model.takePendingFromIntent()
+                Task { await model.foregrounded() }
+            default: break
+            }
         }
         .alert("Couldn't open that link", isPresented: Binding(get: { linkProblem != nil }, set: { if !$0 { linkProblem = nil } })) {
             Button("OK") {}
@@ -55,10 +120,7 @@ struct RootView: View {
         }
         .task(id: [phase == .active ? "on" : "off", model.mac?.id ?? ""]) {
             guard phase == .active else { return }
-            while !Task.isCancelled {
-                await model.refresh()
-                try? await Task.sleep(for: .seconds(3))
-            }
+            await model.follow()
         }
     }
 
@@ -75,10 +137,57 @@ struct RootView: View {
                 MacView()
             }
         }
+        .tabViewStyle(.sidebarAdaptable)
         .tabBarMinimizeBehavior(.onScrollDown)
         .tabViewBottomAccessory(isEnabled: model.snapshot?.away == true) {
             Label("Away — agents' questions come here", systemImage: "figure.walk.departure")
                 .font(.footnote.weight(.medium))
         }
+    }
+}
+
+/// Covers the app until Face ID (or the passcode) unlocks it, and hides it in the app switcher.
+struct LockView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
+            AmbientBackground(tint: model.accent, intensity: 0.8).opacity(0.7)
+            VStack(spacing: 18) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 40, weight: .semibold))
+                    .foregroundStyle(model.accent)
+                    .frame(width: 96, height: 96)
+                    .glassEffect(.regular.tint(model.accent.opacity(0.2)), in: .circle)
+                Text("Agents is locked").font(.title3.weight(.semibold))
+                if model.locked {
+                    Button {
+                        Task { await model.unlock() }
+                    } label: {
+                        Label("Unlock", systemImage: "faceid").padding(.horizontal, 10)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.large)
+                }
+            }
+        }
+    }
+}
+
+struct AgentsShortcuts: AppShortcutsProvider {
+    static var appShortcuts: [AppShortcut] {
+        AppShortcut(intent: MessageAgentIntent(), phrases: [
+            "Message an agent in \(.applicationName)",
+            "Tell \(\.$agent) something in \(.applicationName)",
+        ], shortTitle: "Message Agent", systemImageName: "bubble.left.and.text.bubble.right.fill")
+        AppShortcut(intent: OpenAgentIntent(), phrases: [
+            "Open \(\.$agent) in \(.applicationName)",
+            "Show my agent in \(.applicationName)",
+        ], shortTitle: "Open Agent", systemImageName: "bolt.horizontal.circle.fill")
+        AppShortcut(intent: SetAwayIntent(), phrases: [
+            "Set away mode in \(.applicationName)",
+            "I'm stepping away in \(.applicationName)",
+        ], shortTitle: "Away Mode", systemImageName: "figure.walk.departure")
     }
 }

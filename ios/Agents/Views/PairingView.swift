@@ -107,10 +107,6 @@ struct PairingView: View {
     }
 }
 
-extension PairingLink {
-    init(base: URL) { self.init(base.absoluteString)! }
-}
-
 /// The camera, looking for the pairing QR code.
 struct QRScanner: UIViewControllerRepresentable {
     let found: (String) -> Void

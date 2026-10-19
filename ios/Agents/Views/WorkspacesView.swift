@@ -4,6 +4,8 @@ import SwiftUI
 struct WorkspacesView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("collapsedRepos") private var collapsedStore = ""
+    @State private var newTask = false
+    @Namespace private var zoom
 
     private var collapsed: Set<String> { Set(collapsedStore.split(separator: ",").map(String.init)) }
 
@@ -20,19 +22,30 @@ struct WorkspacesView: View {
                                     Text(repo.name)
                                     Spacer()
                                     let active = repo.workspaces.filter { $0.state != .idle }.count
-                                    Text(active > 0 ? "\(active) active · \(repo.workspaces.count)" : "\(repo.workspaces.count)")
-                                        .font(.caption).foregroundStyle(.secondary).textCase(nil)
+                                    if active > 0 { Badge(text: "\(active) active", tint: model.accent) }
+                                    Text("\(repo.workspaces.count)").font(.caption).foregroundStyle(.secondary).textCase(nil)
                                 }
                             }
                         }
                     }
                     .listStyle(.sidebar)
+                    .scrollContentBackground(.hidden)
                 } else {
                     ProgressView()
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background { AmbientBackground(tint: model.accent, intensity: 0.6) }
             .navigationTitle("Workspaces")
-            .navigationDestination(for: String.self) { ChatView(sessionID: $0) }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("New task", systemImage: "plus") { newTask = true }.disabled(model.workspaces == nil)
+                }
+            }
+            .navigationDestination(for: String.self) { id in
+                ChatView(sessionID: id).navigationTransition(.zoom(sourceID: id, in: zoom))
+            }
+            .sheet(isPresented: $newTask) { NewTaskView(repos: model.workspaces?.repos ?? []) }
             .refreshable { await model.refresh(workspaces: true) }
             .task {
                 while !Task.isCancelled {
@@ -45,22 +58,23 @@ struct WorkspacesView: View {
 
     @ViewBuilder private func row(_ workspace: Workspace) -> some View {
         let label = HStack(spacing: 12) {
-            StateIcon(state: workspace.state, size: 24)
+            StateIcon(state: workspace.held ? .waiting : workspace.state, size: 24)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(workspace.title).font(.body.weight(.medium)).lineLimit(1)
                     if workspace.pinned { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }
-                    if workspace.held { Badge(text: "asks", prominent: true) }
+                    if workspace.held { Badge(text: "asks", tint: .orange) }
                 }
                 Text(subtitle(workspace)).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
-            Text(workspace.updated > 0 ? ago(workspace.updated) : "").font(.caption).foregroundStyle(.tertiary)
+            Text(workspace.updated > 0 ? ago(workspace.updated) : "").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
         }
         if let session = workspace.session {
-            NavigationLink(value: session) { label }
+            NavigationLink(value: session) { label.matchedTransitionSource(id: session, in: zoom) }
+                .listRowBackground(Color.clear)
         } else {
-            label.opacity(0.5)
+            label.opacity(0.5).listRowBackground(Color.clear)
         }
     }
 
@@ -77,6 +91,57 @@ struct WorkspacesView: View {
             var set = collapsed
             if open { set.remove(id) } else { set.insert(id) }
             collapsedStore = set.sorted().joined(separator: ",")
+        }
+    }
+}
+
+/// Starts a new Conductor workspace on the Mac from a prompt (opens Conductor's composer there).
+struct NewTaskView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let repos: [Repository]
+    @State private var repo = ""
+    @State private var prompt = ""
+    @State private var working = false
+    @State private var problem: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Picker("Repository", selection: $repo) {
+                    ForEach(repos) { Text($0.name).tag($0.id) }
+                }
+                Section {
+                    TextField("What should the agent do?", text: $prompt, axis: .vertical).lineLimit(4...12)
+                } footer: {
+                    Text(problem ?? "Opens Conductor on your Mac with a new workspace and this prompt ready to go.")
+                        .foregroundStyle(problem == nil ? Color.secondary : Color.red)
+                }
+            }
+            .navigationTitle("New task")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(working ? "Starting…" : "Start") { start() }
+                        .disabled(working || repo.isEmpty || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear { if repo.isEmpty { repo = repos.first?.id ?? "" } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func start() {
+        working = true
+        Task {
+            defer { working = false }
+            do {
+                try await model.client?.startTask(repo: repo, prompt: prompt)
+                dismiss()
+            } catch {
+                problem = error.localizedDescription
+            }
         }
     }
 }

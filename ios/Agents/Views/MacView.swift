@@ -1,9 +1,12 @@
 import SwiftUI
+import UserNotifications
 
 /// The paired Macs, away mode and the connection.
 struct MacView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openURL) private var openURL
     @State private var pairing = false
+    @State private var notifications: UNAuthorizationStatus = .notDetermined
 
     var body: some View {
         NavigationStack {
@@ -18,6 +21,9 @@ struct MacView: View {
                         if let problem = model.problem {
                             Text(problem).font(.footnote).foregroundStyle(.secondary)
                         }
+                        LabeledContent("Updates") {
+                            Text(model.live ? "Live" : "Every few seconds").foregroundStyle(.secondary)
+                        }
                         if let theme = model.snapshot?.theme { LabeledContent("Theme", value: theme.name) }
                     }
                     Section {
@@ -27,6 +33,21 @@ struct MacView: View {
                     } footer: {
                         Text("While away mode is on, an agent's question waits here for your answer instead of on the Mac. Anything you type in Conductor still wins.")
                     }
+                }
+                Section {
+                    Toggle(isOn: Binding(get: { notifications == .authorized }, set: { on in
+                        if on { Task { await model.enableNotifications(); await readNotificationSettings() } } else { openSettings() }
+                    })) {
+                        Label("Notifications", systemImage: "bell.badge.fill")
+                    }
+                    @Bindable var model = model
+                    Toggle(isOn: $model.requireFaceID) {
+                        Label("Require Face ID", systemImage: "faceid")
+                    }
+                } header: {
+                    Text("This iPhone")
+                } footer: {
+                    Text("Notifications arrive when an agent finishes or asks something; reply right from the lock screen. They need the Mac set up for push (see the README).")
                 }
                 Section("Paired Macs") {
                     ForEach(model.macs) { mac in
@@ -47,6 +68,17 @@ struct MacView: View {
             }
             .navigationTitle("Mac")
             .sheet(isPresented: $pairing) { PairingView(dismissable: true) }
+            .scrollContentBackground(.hidden)
+            .background { AmbientBackground(tint: model.accent, intensity: 0.5) }
+            .task { await readNotificationSettings() }
         }
+    }
+
+    private func readNotificationSettings() async {
+        notifications = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    private func openSettings() {
+        if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
     }
 }

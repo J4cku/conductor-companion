@@ -8,12 +8,19 @@ struct PairedMac: Codable, Sendable, Identifiable, Hashable {
     let base: URL
     let token: String
     var pairedAt: Date = .now
+
+    var client: APIClient { APIClient(base: base, token: token) }
 }
 
 /// What a pairing link carries: the Mac's address and, from a QR code, a one-time secret.
 struct PairingLink: Sendable, Equatable {
     let base: URL
     let secret: String?
+
+    init(base: URL) {
+        self.base = base
+        secret = nil
+    }
 
     /// Accepts the QR code's web link (`http://192.168.1.10:47823/#pair=SECRET`),
     /// `agents://pair?base=…&secret=…`, or a bare address typed by hand.
@@ -40,7 +47,8 @@ struct PairingLink: Sendable, Equatable {
     }
 }
 
-/// Paired Macs, stored as one Keychain item.
+/// Paired Macs, one Keychain item in the access group the app and its widgets share
+/// (the first entry of `keychain-access-groups`, so no group needs naming here).
 enum MacKeychain {
     private static let service = "com.j4cku.agents"
     private static let account = "paired-macs"
@@ -60,5 +68,28 @@ enum MacKeychain {
         if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecItemNotFound {
             SecItemAdd(query.merging(attributes) { $1 } as CFDictionary, nil)
         }
+    }
+}
+
+/// State the app shares with its widgets and Live Activity through the app group.
+enum SharedStore {
+    static let group = "group.com.j4cku.agents"
+    nonisolated(unsafe) static let defaults = UserDefaults(suiteName: group) ?? .standard  // UserDefaults is thread-safe
+
+    static var selectedMacID: String? {
+        get { defaults.string(forKey: "selectedMac") }
+        set { defaults.set(newValue, forKey: "selectedMac") }
+    }
+
+    /// The Mac the app shows, for the widgets too.
+    static var currentMac: PairedMac? {
+        let macs = MacKeychain.load()
+        return macs.first { $0.id == selectedMacID } ?? macs.first
+    }
+
+    /// The last snapshot, so launch and widgets have something to show before the Mac answers.
+    static var lastSnapshot: SessionsSnapshot? {
+        get { defaults.data(forKey: "snapshot").flatMap { try? JSONDecoder().decode(SessionsSnapshot.self, from: $0) } }
+        set { defaults.set(newValue.flatMap { try? JSONEncoder().encode($0) }, forKey: "snapshot") }
     }
 }

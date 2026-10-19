@@ -106,10 +106,7 @@ struct MarkdownView: View {
                         }
                     }
                 case let .code(code):
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        Text(code).font(.system(.footnote, design: .monospaced)).padding(12)
-                    }
-                    .background(.fill.tertiary, in: .rect(cornerRadius: 12))
+                    CodeBlock(code: code)
                 case let .quote(text):
                     Text(inline(text)).foregroundStyle(.secondary).padding(.leading, 10)
                         .overlay(alignment: .leading) { Capsule().fill(.tertiary).frame(width: 3) }
@@ -132,5 +129,59 @@ struct MarkdownView: View {
             }
         }
         .textSelection(.enabled)
+    }
+}
+
+/// A code block: horizontally scrollable, long ones folded, with a copy button.
+struct CodeBlock: View {
+    let code: String
+    @State private var open = false
+    @State private var copied = 0
+
+    private var lines: [Substring] { code.split(separator: "\n", omittingEmptySubsequences: false) }
+    private var long: Bool { lines.count > 14 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(long && !open ? lines.prefix(10).joined(separator: "\n") : code)
+                    .font(.system(.footnote, design: .monospaced))
+                    .padding(12)
+                    .padding(.trailing, 34)
+            }
+            if long {
+                Button {
+                    withAnimation(.snappy) { open.toggle() }
+                } label: {
+                    Label(open ? "Fold" : "\(lines.count - 10) more lines", systemImage: open ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 7)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .background(.fill.quaternary)
+            }
+        }
+        .background(.fill.tertiary, in: .rect(cornerRadius: 14))
+        .clipShape(.rect(cornerRadius: 14))
+        .overlay(alignment: .topTrailing) {
+            Button {
+                UIPasteboard.general.string = code
+                copied += 1
+            } label: {
+                Image(systemName: copied > 0 ? "checkmark" : "doc.on.doc").font(.caption.weight(.semibold)).frame(width: 18, height: 18)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .controlSize(.mini)
+            .padding(6)
+            .accessibilityLabel("Copy code")
+        }
+        .sensoryFeedback(.success, trigger: copied)
+        .task(id: copied) {
+            guard copied > 0 else { return }
+            try? await Task.sleep(for: .seconds(2))
+            copied = 0
+        }
     }
 }

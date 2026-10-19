@@ -9,18 +9,43 @@ settings:
     DEVELOPMENT_TEAM: C233ZYQ8WJ
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.1"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.2"
+    CURRENT_PROJECT_VERSION: "2"
 targets:
   Agents:
     type: application
     platform: iOS
     sources:
       - path: Agents
+      - path: Shared
+    dependencies:
+      - target: AgentsWidgets
+    entitlements:
+      path: Agents/Agents.entitlements
+      properties:
+        aps-environment: development
+        com.apple.security.application-groups: [group.com.j4cku.agents]
+        keychain-access-groups: ["$(AppIdentifierPrefix)com.j4cku.agents.shared"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.j4cku.agents
         INFOPLIST_FILE: Agents/Info.plist
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  AgentsWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: AgentsWidgets
+      - path: Shared
+    entitlements:
+      path: AgentsWidgets/AgentsWidgets.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.j4cku.agents]
+        keychain-access-groups: ["$(AppIdentifierPrefix)com.j4cku.agents.shared"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.j4cku.agents.widgets
+        INFOPLIST_FILE: AgentsWidgets/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
