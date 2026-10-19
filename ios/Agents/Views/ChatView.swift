@@ -5,6 +5,7 @@ import SwiftUI
 /// quick replies, dictation, photos, and the message box.
 struct ChatView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var size
     let sessionID: String
 
     @State private var transcript: Transcript?
@@ -60,7 +61,7 @@ struct ChatView: View {
         .navigationTitle(transcript?.session?.name ?? "Chat")
         .navigationSubtitle(subtitle)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .tabBar)
+        .toolbar(size == .compact ? .hidden : .automatic, for: .tabBar)
         .toolbar {
             if transcript?.session?.workspace != nil {
                 ToolbarItem(placement: .topBarTrailing) {

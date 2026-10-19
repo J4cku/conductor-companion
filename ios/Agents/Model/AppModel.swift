@@ -62,15 +62,24 @@ final class AppModel {
         }
     }
 
-    func refresh(workspaces includeWorkspaces: Bool = false) async {
+    func refresh() async {
         guard let client else { return }
         do {
             apply(try await client.sessions())
-            if includeWorkspaces {
-                let list = try await client.workspaces()
-                if list != workspaces { workspaces = list }
-            }
             problem = nil
+        } catch let error as ServerError where error.status == 401 {
+            problem = "This Mac no longer recognises the phone. Pair again."
+        } catch {
+            problem = "Can't reach \(mac?.name ?? "the Mac"): \(error.localizedDescription)"
+        }
+    }
+
+    /// The workspace list; sessions come from the live stream.
+    func refreshWorkspaces() async {
+        guard let client else { return }
+        do {
+            let list = try await client.workspaces()
+            if list != workspaces { withAnimation(.snappy) { workspaces = list } }
         } catch let error as ServerError where error.status == 401 {
             problem = "This Mac no longer recognises the phone. Pair again."
         } catch {
@@ -164,7 +173,9 @@ final class AppModel {
                 await register(push: token.hex, kind: "pushtostart")
             }
         }
-        for activity in Activity<AgentsActivityAttributes>.activities { observePushToken(of: activity) }
+        Task {  // includes activities the Mac starts by push while the app is closed
+            for await activity in Activity<AgentsActivityAttributes>.activityUpdates { observePushToken(of: activity) }
+        }
     }
 
     // MARK: Push notifications

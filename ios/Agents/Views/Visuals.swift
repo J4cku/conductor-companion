@@ -4,6 +4,7 @@ import SwiftUI
 struct AmbientBackground: View {
     let tint: Color
     var intensity: Double = 1
+    private let base = Color(uiColor: .systemBackground)
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 20)) { context in
@@ -13,10 +14,11 @@ struct AmbientBackground: View {
                 [0, 0.5], [Float(0.5 + 0.18 * sin(t)), Float(0.42 + 0.12 * cos(t * 1.3))], [1, 0.5],
                 [0, 1], [0.5, 1], [1, 1],
             ], colors: [
-                tint.opacity(0.42 * intensity), .black, tint.opacity(0.16 * intensity),
-                .black, tint.opacity(0.24 * intensity), .black,
-                .black, tint.opacity(0.1 * intensity), .black,
+                tint.opacity(0.42 * intensity), base, tint.opacity(0.16 * intensity),
+                base, tint.opacity(0.24 * intensity), base,
+                base, tint.opacity(0.1 * intensity), base,
             ])
+            .background(base)
         }
         .ignoresSafeArea()
     }
@@ -74,7 +76,7 @@ struct SummaryCard: View {
                 metric(money(snapshot.today?.cost) ?? "$0", label: "today", symbol: "dollarsign.circle.fill", tint: .green, pulse: false)
             }
             if let today = snapshot.today, today.turns > 0 {
-                Label("\(count(today.turns)) turns · \(count(today.tools)) tool calls today", systemImage: "chart.bar.fill")
+                Label("\(count(today.turns, "turn")) · \(count(today.tools, "tool call")) today", systemImage: "chart.bar.fill")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -83,7 +85,9 @@ struct SummaryCard: View {
         .glassCard(model.accent, radius: 30)
     }
 
-    private func count(_ value: Int) -> String { value.formatted(.number.locale(Locale(identifier: "en_US"))) }
+    private func count(_ value: Int, _ noun: String) -> String {
+        "\(value.formatted(.number.locale(Locale(identifier: "en_US")))) \(noun)\(value == 1 ? "" : "s")"
+    }
 
     private func metric(_ value: String, label: String, symbol: String, tint: Color, pulse: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {

@@ -3,40 +3,59 @@ import SwiftUI
 /// What needs you, then what's working, then what finished — with a glance card on top.
 struct ActiveView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var size
     @Binding var path: [String]
     @Namespace private var zoom
 
     var body: some View {
-        NavigationStack(path: $path) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    if let problem = model.problem { ProblemBanner(text: problem) }
-                    if let snapshot = model.snapshot {
-                        SummaryCard(snapshot: snapshot)
-                        sections(snapshot)
-                    } else if model.problem == nil {
-                        ProgressView().frame(maxWidth: .infinity).padding(.top, 120)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 40)
-            }
-            .background { AmbientBackground(tint: model.accent) }
-            .navigationTitle("Agents")
-            .navigationSubtitle(subtitle)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    if model.live {
-                        Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(model.accent).symbolEffect(.variableColor.iterative)
-                            .accessibilityLabel("Live")
+        if size == .regular {
+            NavigationSplitView {
+                content.navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 480)
+            } detail: {
+                NavigationStack {
+                    if let id = path.last {
+                        ChatView(sessionID: id).id(id)
+                    } else {
+                        ContentUnavailableView("Pick a chat", systemImage: "bubble.left.and.text.bubble.right", description: Text("Its conversation opens here."))
+                            .background { AmbientBackground(tint: model.accent, intensity: 0.3) }
                     }
                 }
             }
-            .navigationDestination(for: String.self) { id in
-                ChatView(sessionID: id).navigationTransition(.zoom(sourceID: id, in: zoom))
+        } else {
+            NavigationStack(path: $path) {
+                content.navigationDestination(for: String.self) { id in
+                    ChatView(sessionID: id).navigationTransition(.zoom(sourceID: id, in: zoom))
+                }
             }
-            .refreshable { await model.refresh() }
         }
+    }
+
+    private var content: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                if let problem = model.problem { ProblemBanner(text: problem) }
+                if let snapshot = model.snapshot {
+                    SummaryCard(snapshot: snapshot)
+                    sections(snapshot)
+                } else if model.problem == nil {
+                    ProgressView().frame(maxWidth: .infinity).padding(.top, 120)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 40)
+        }
+        .background { AmbientBackground(tint: model.accent) }
+        .navigationTitle("Agents")
+        .navigationSubtitle(subtitle)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if model.live {
+                    Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(model.accent).symbolEffect(.variableColor.iterative)
+                        .accessibilityLabel("Live")
+                }
+            }
+        }
+        .refreshable { await model.refresh() }
     }
 
     private var subtitle: String {
@@ -67,10 +86,14 @@ struct ActiveView: View {
             GlassEffectContainer(spacing: 8) {
                 VStack(spacing: 8) {
                     ForEach(sessions) { session in
-                        NavigationLink(value: session.id) {
+                        let selected = size == .regular && path.last == session.id
+                        Button {
+                            path = size == .regular ? [session.id] : path + [session.id]
+                        } label: {
                             SessionRow(session: session)
                                 .padding(.horizontal, 14).padding(.vertical, 10)
-                                .glassCard(tint, radius: 22)
+                                .glassCard(selected ? model.accent : tint, radius: 22)
+                                .overlay { if selected { RoundedRectangle(cornerRadius: 22).strokeBorder(model.accent.opacity(0.6), lineWidth: 1.5) } }
                                 .matchedTransitionSource(id: session.id, in: zoom)
                         }
                         .buttonStyle(.plain)

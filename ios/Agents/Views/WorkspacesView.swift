@@ -4,54 +4,74 @@ import SwiftUI
 struct WorkspacesView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("collapsedRepos") private var collapsedStore = ""
+    @Environment(\.horizontalSizeClass) private var size
     @State private var newTask = false
+    @State private var selected: String?
     @Namespace private var zoom
 
     private var collapsed: Set<String> { Set(collapsedStore.split(separator: ",").map(String.init)) }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let workspaces = model.workspaces {
-                    List {
-                        ForEach(workspaces.repos) { repo in
-                            Section(isExpanded: expanded(repo.id)) {
-                                ForEach(repo.workspaces) { workspace in row(workspace) }
-                            } header: {
-                                HStack {
-                                    Text(repo.name)
-                                    Spacer()
-                                    let active = repo.workspaces.filter { $0.state != .idle }.count
-                                    if active > 0 { Badge(text: "\(active) active", tint: model.accent) }
-                                    Text("\(repo.workspaces.count)").font(.caption).foregroundStyle(.secondary).textCase(nil)
-                                }
+        if size == .regular {
+            NavigationSplitView {
+                list.navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 480)
+            } detail: {
+                NavigationStack {
+                    if let selected {
+                        ChatView(sessionID: selected).id(selected)
+                    } else {
+                        ContentUnavailableView("Pick a workspace", systemImage: "square.stack.3d.up", description: Text("Its chat opens here."))
+                            .background { AmbientBackground(tint: model.accent, intensity: 0.3) }
+                    }
+                }
+            }
+        } else {
+            NavigationStack {
+                list.navigationDestination(for: String.self) { id in
+                    ChatView(sessionID: id).navigationTransition(.zoom(sourceID: id, in: zoom))
+                }
+            }
+        }
+    }
+
+    private var list: some View {
+        Group {
+            if let workspaces = model.workspaces {
+                List(selection: size == .regular ? $selected : nil) {
+                    ForEach(workspaces.repos) { repo in
+                        Section(isExpanded: expanded(repo.id)) {
+                            ForEach(repo.workspaces) { workspace in row(workspace) }
+                        } header: {
+                            HStack {
+                                Text(repo.name)
+                                Spacer()
+                                let active = repo.workspaces.filter { $0.state != .idle }.count
+                                if active > 0 { Badge(text: "\(active) active", tint: model.accent) }
+                                Text("\(repo.workspaces.count)").font(.caption).foregroundStyle(.secondary).textCase(nil)
                             }
                         }
                     }
-                    .listStyle(.sidebar)
-                    .scrollContentBackground(.hidden)
-                } else {
-                    ProgressView()
                 }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+            } else {
+                ProgressView()
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background { AmbientBackground(tint: model.accent, intensity: 0.6) }
-            .navigationTitle("Workspaces")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("New task", systemImage: "plus") { newTask = true }.disabled(model.workspaces == nil)
-                }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { AmbientBackground(tint: model.accent, intensity: 0.6) }
+        .navigationTitle("Workspaces")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("New task", systemImage: "plus") { newTask = true }.disabled(model.workspaces == nil)
             }
-            .navigationDestination(for: String.self) { id in
-                ChatView(sessionID: id).navigationTransition(.zoom(sourceID: id, in: zoom))
-            }
-            .sheet(isPresented: $newTask) { NewTaskView(repos: model.workspaces?.repos ?? []) }
-            .refreshable { await model.refresh(workspaces: true) }
-            .task {
-                while !Task.isCancelled {
-                    await model.refresh(workspaces: true)
-                    try? await Task.sleep(for: .seconds(5))
-                }
+        }
+        .sheet(isPresented: $newTask) { NewTaskView(repos: model.workspaces?.repos ?? []) }
+        .refreshable { await model.refreshWorkspaces() }
+        .task {
+            while !Task.isCancelled {
+                await model.refreshWorkspaces()
+                try? await Task.sleep(for: .seconds(5))
             }
         }
     }
