@@ -20,9 +20,7 @@ import math
 import os
 import re
 import json
-import secrets
 import select
-import socket
 import sqlite3
 import struct
 import subprocess
@@ -35,7 +33,6 @@ HOME = os.path.expanduser('~/.claude/agent-status')
 SESSIONS = os.path.join(HOME, 'sessions')
 STATS = os.path.join(HOME, 'stats')
 THEME_FILE = os.path.join(HOME, 'theme')
-PHONE = os.path.join(HOME, 'phone')  # the phone bridge: phone/server.py and ~/.claude/hooks/phone-relay.sh
 MUTE_FILE = os.path.join(HOME, 'mute')  # read by wc3.sh: empty = muted until turned back on, an epoch = muted until then
 CONDUCTOR_DB = os.path.expanduser('~/Library/Application Support/com.conductor.app/conductor.db')
 
@@ -472,101 +469,6 @@ def cached(key, ttl, compute):
     return hit[1]
 
 
-def phone_config():
-    return {'lan': False, 'port': 47823, **read_json(os.path.join(PHONE, 'config.json'), {})}
-
-
-TAILSCALE = '/Applications/Tailscale.app/Contents/MacOS/Tailscale'
-
-
-def server_up():
-    def probe():
-        try:
-            socket.create_connection(('127.0.0.1', phone_config()['port']), timeout=0.1).close()
-            return True
-        except OSError:
-            return False
-    return cached('server_up', 5, probe)
-
-
-def tailscale_state():
-    """'off' (signed out or not running), 'ready' (signed in, not serving us) or 'serving'."""
-    def look():
-        def run(*args):
-            return subprocess.run([TAILSCALE, *args], capture_output=True, text=True, timeout=5,
-                                  env={**os.environ, 'TAILSCALE_BE_CLI': '1'}).stdout or '{}'  # else it hangs outside a shell
-        try:
-            status, serve = json.loads(run('status', '--json')), run('serve', 'status', '--json')
-        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-            return 'off'
-        if status.get('BackendState') != 'Running':
-            return 'off'
-        return 'serving' if f":{phone_config()['port']}" in serve else 'ready'
-    return cached('tailscale', 15, look)
-
-
-def phone_menu(now):
-    away = os.path.exists(os.path.join(PHONE, 'away'))
-    held = len([n for n in os.listdir(os.path.join(PHONE, 'waiting')) if n.endswith('.json')]) if os.path.isdir(os.path.join(PHONE, 'waiting')) else 0
-    offer, devices, tailscale = read_json(os.path.join(PHONE, 'pairing.json'), None), read_json(os.path.join(PHONE, 'devices.json'), {}), tailscale_state()
-    page = f"http://127.0.0.1:{phone_config()['port']}/pair"
-    out = [
-        'Phone' + (f': away · {held} waiting for you' if away and held else ': away' if away else ''),
-        line("--Away mode (agents' questions wait for your phone)", 'stdin=phone:away', 'checked=true' if away else ''),
-        line('--Pair a phone…', 'stdin=phone:pair'),
-    ]
-    if offer and offer['expires'] > now:
-        out.append(line(f"--Show the pairing QR code · {offer['code']} · until {time.strftime('%H:%M', time.localtime(offer['expires']))}", f'href={page}', 'size=12'))
-    out += [
-        '-----',
-        line('--Reach from anywhere (Tailscale, phone needs Tailscale too)' if tailscale != 'off' else '--Reach from anywhere: sign in to Tailscale first',
-             'stdin=phone:tailscale', 'checked=true' if tailscale == 'serving' else ''),
-        line('--Reachable over this Wi-Fi (plain HTTP)', 'stdin=phone:lan', 'checked=true' if phone_config()['lan'] else ''),
-    ]
-    if devices:
-        out.append(line('--Paired devices (⌥ to revoke)', 'size=11'))
-        for key, device in devices.items():
-            out.append(line(f"--{device['name']} · seen {ago(now - device.get('last_seen', now))} ago"))
-            out.append(line(f"--Revoke {device['name']}", 'alternate=true', f'stdin=phone:revoke:{key[:16]}'))
-    out.append(line(f"--Server {'running' if server_up() else 'not running'}", 'size=11'))
-    return out
-
-
-def phone_command(arg, now):
-    if arg == 'away':
-        path = os.path.join(PHONE, 'away')
-        remove(path) if os.path.exists(path) else open(path, 'a').close()
-    elif arg == 'pair':
-        offer = {'secret': secrets.token_urlsafe(18), 'code': f'{secrets.randbelow(10 ** 6):06d}', 'expires': now + 600}
-        with open(os.path.join(PHONE, 'pairing.json'), 'w') as f:
-            json.dump(offer, f)
-        subprocess.Popen(['/usr/bin/open', f"http://127.0.0.1:{phone_config()['port']}/pair"])
-    elif arg == 'tailscale':
-        state = tailscale_state()
-        if state == 'off':
-            subprocess.Popen(['/usr/bin/open', '-a', 'Tailscale'])
-        else:
-            port = str(phone_config()['port'])
-            try:
-                done = subprocess.run([TAILSCALE, 'serve', '--https=443', 'off'] if state == 'serving' else [TAILSCALE, 'serve', '--bg', port],
-                                      capture_output=True, text=True, timeout=30, env={**os.environ, 'TAILSCALE_BE_CLI': '1'})
-                consent = re.search(r'https://login\.tailscale\.com/\S+', done.stdout + done.stderr)
-            except subprocess.TimeoutExpired as waited:  # serve waits while the tailnet's HTTPS certificates are switched on
-                consent = re.search(r'https://login\.tailscale\.com/\S+', str(waited.stdout or '') + str(waited.stderr or ''))
-            if consent:
-                subprocess.Popen(['/usr/bin/open', consent.group(0)])
-        memory.pop('tailscale', None)
-    elif arg == 'lan':
-        config = phone_config()
-        with open(os.path.join(PHONE, 'config.json'), 'w') as f:
-            json.dump({**config, 'lan': not config['lan']}, f)
-        memory.pop('server_up', None)
-    elif arg.startswith('revoke:'):
-        devices = read_json(os.path.join(PHONE, 'devices.json'), {})
-        with open(os.path.join(PHONE, 'devices.json'), 'w') as f:
-            json.dump({k: v for k, v in devices.items() if not k.startswith(arg[7:])}, f)
-
-
 def muted_until(now):
     """None while sounds play, 0 when muted until turned back on, else the epoch they come back at."""
     try:
@@ -798,7 +700,6 @@ def render(sessions, now, tick):
         line('--Mute until tomorrow 9:00', 'stdin=sound:morning'),
         line('--Mute until I turn them on', 'stdin=sound:off', 'checked=true' if silence == 0 else ''),
     ]
-    out += phone_menu(now)
     return '\n'.join(out), top == 'working'
 
 
@@ -826,8 +727,6 @@ def handle(command, now):
     elif verb == 'theme' and arg in THEMES:
         with open(THEME_FILE, 'w') as f:
             f.write(arg + '\n')
-    elif verb == 'phone':
-        phone_command(arg, now)
     elif verb == 'sound' and arg == 'on':
         remove(MUTE_FILE)
     elif verb == 'sound':

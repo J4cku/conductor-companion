@@ -1,11 +1,2 @@
 .DS_Store
-ios/build/
-ios/*.xcodeproj/
-ios/DerivedData/
-*.xcuserstate
-xcuserdata/
 __pycache__/
-
-# APNs keys and push config never belong in the repo
-*.p8
-apns.json
