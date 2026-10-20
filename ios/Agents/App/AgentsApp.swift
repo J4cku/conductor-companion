@@ -64,8 +64,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         await MainActor.run { model?.pendingSession = session }
     }
 
+    /// The app is on screen and already shows what changed, so a notification adds nothing.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        []
     }
 }
 

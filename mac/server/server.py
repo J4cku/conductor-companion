@@ -78,6 +78,7 @@ ATTACHMENT_TYPES = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gi
                     'application/json': '.json', 'text/markdown': '.md', 'text/csv': '.csv', 'text/html': '.html'}  # and any other text/*
 GIT_STATUS = {'A': 'added', 'M': 'modified', 'D': 'deleted', 'R': 'renamed', 'C': 'copied', 'T': 'modified', 'U': 'conflicted'}
 PUSH_KINDS = ('alert', 'liveactivity', 'pushtostart')
+AT_MAC_IDLE = 180  # seconds without keyboard or mouse input after which you count as away from the Mac
 NOT_RUNNING = "This chat's agent isn't running (Conductor stops idle ones). Open it in Conductor once, then try again."
 
 spec = importlib.util.spec_from_file_location('agent_status', PLUGIN)
@@ -86,6 +87,7 @@ spec.loader.exec_module(agent_status)
 
 lock = threading.Lock()
 cache = {}
+watching = {}  # device digest → open live streams: the app is on screen there, so it needs no notifications
 pairing_failures = {'count': 0}
 cost_lock = threading.Lock()
 turn_costs = {}  # session id -> {'last': sent_at of the newest result row read, 'total': its total_cost_usd, 'steps': [(sent_at, usd)]}
@@ -807,13 +809,33 @@ def apns_send(settings, token, environment, payload, live):
     return int(code) if code.isdigit() else 0, reason
 
 
-def push(kind, payload):
-    """Sends to every device registered for `kind`. Returns the (device, token) pairs that are done with:
-    accepted by Apple, or rejected as no longer valid (those are dropped from the registry here)."""
+def user_at_mac():
+    """Someone is using this Mac: the screen is unlocked and there was keyboard or mouse input in the last few minutes."""
+    if '"CGSSessionScreenIsLocked"=Yes' in run('/usr/sbin/ioreg', '-n', 'Root', '-d1'):
+        return False
+    idle = re.search(r'"HIDIdleTime" = (\d+)', run('/usr/sbin/ioreg', '-c', 'IOHIDSystem', '-d', '4'))
+    return bool(idle) and int(idle.group(1)) / 1e9 < AT_MAC_IDLE
+
+
+def quiet_devices():
+    """Devices that shouldn't get notifications now: every one while you're at the Mac (unless away mode is on), and any
+    phone with the app open on screen."""
+    with lock:
+        quiet = {key for key, streams in watching.items() if streams > 0}
+    if not os.path.exists(AWAY) and user_at_mac():
+        quiet |= set(read_json(DEVICES, {}))
+    return quiet
+
+
+def push(kind, payload, skip=frozenset()):
+    """Sends to every device registered for `kind` except those in `skip`. Returns the (device, token) pairs that are done
+    with: accepted by Apple, or rejected as no longer valid (those are dropped from the registry here)."""
     settings, done = apns_settings(), []
     if settings is None:
         return done
     for key, token, environment in push_tokens(kind):
+        if key in skip:
+            continue
         try:
             status, reason = apns_send(settings, token, environment, payload, live=kind in ('liveactivity', 'pushtostart'))
         except Exception as error:  # a failed send must not stop the others or repeat the batch
@@ -915,8 +937,10 @@ def watch_for_push():
             if previous is None:
                 live_sent = live
                 continue
-            for payload in session_alerts(listed, previous, badge, theme):
-                push('alert', payload)
+            alerts = session_alerts(listed, previous, badge, theme)
+            quiet = quiet_devices() if alerts else set()
+            for payload in alerts:
+                push('alert', payload, skip=quiet)
             idle = (frozenset(), 0)
             if live == idle:
                 start_owed = False
@@ -933,7 +957,7 @@ def watch_for_push():
                     live_sent, live_at = live, now
             else:
                 if start_owed and now - started_at >= 600 and push_tokens('pushtostart'):
-                    done = push('pushtostart', live_activity_start(live_activity(working, badge, theme, now)))
+                    done = push('pushtostart', live_activity_start(live_activity(working, badge, theme, now)), skip=quiet_devices())
                     if {token for _, token in done} & {token for _, token, _ in push_tokens('pushtostart')}:  # still registered = accepted
                         start_owed = False
                     started_at = now  # a failed start waits as long as a sent one before trying again
@@ -1000,6 +1024,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('X-Accel-Buffering', 'no')
         self.end_headers()
         sent, pinged = {}, time.time()
+        with lock:
+            watching[key_of_device] = watching.get(key_of_device, 0) + 1
         try:
             while not self.client_gone() and key_of_device in read_json(DEVICES, {}):
                 try:
@@ -1020,6 +1046,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 time.sleep(1)
         except (BrokenPipeError, ConnectionResetError):
             pass
+        finally:
+            with lock:
+                watching[key_of_device] -= 1
 
     def route(self, method):
         url = urllib.parse.urlparse(self.path)
