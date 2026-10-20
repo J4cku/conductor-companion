@@ -48,7 +48,7 @@ struct AgentQuery: EntityStringQuery {
 
 struct MessageAgentIntent: AppIntent {
     static let title: LocalizedStringResource = "Message an Agent"
-    static let description = IntentDescription("Send a message to one of your agents on your Mac.")
+    static let description = IntentDescription("Send a message to one of your coding agents.")
 
     @Parameter(title: "Agent") var agent: AgentEntity
     @Parameter(title: "Message", inputOptions: String.IntentInputOptions(multiline: true)) var message: String
@@ -56,7 +56,7 @@ struct MessageAgentIntent: AppIntent {
     static var parameterSummary: some ParameterSummary { Summary("Tell \(\.$agent) \(\.$message)") }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        guard let client = SharedStore.currentMac?.client else { throw ServerError(message: "Pair the app with your Mac first.", status: 0) }
+        guard let client = SharedStore.currentMac?.client else { throw ServerError(message: "Pair the app with your computer first.", status: 0) }
         let result = try await client.reply(agent.id, text: message)
         return .result(dialog: "\(result.detail)")
     }
