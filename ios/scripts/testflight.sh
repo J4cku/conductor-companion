@@ -8,7 +8,7 @@ ARCHIVE=build/Agents-$BUILD.xcarchive
 LOG=build/testflight-$BUILD.log
 mkdir -p build
 xcodegen generate >/dev/null
-echo "Archiving build $BUILD…"
+echo "Archiving build ${BUILD}…"
 if ! xcodebuild -project Agents.xcodeproj -scheme Agents -configuration Release -destination 'generic/platform=iOS' \
     -archivePath "$ARCHIVE" -allowProvisioningUpdates CURRENT_PROJECT_VERSION="$BUILD" archive >"$LOG" 2>&1; then
   grep -E 'error:' "$LOG" || tail -20 "$LOG"
@@ -20,4 +20,4 @@ if ! xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportOptionsPlist scrip
   grep -A3 -E 'error' "$LOG" | tail -12
   exit 1
 fi
-echo "Uploaded build $BUILD. It shows in App Store Connect → TestFlight once Apple finishes processing (usually 5–15 minutes)."
+echo "Uploaded build ${BUILD}. It shows in App Store Connect → TestFlight once Apple finishes processing (usually 5–15 minutes)."
