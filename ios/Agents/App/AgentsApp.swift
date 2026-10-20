@@ -1,4 +1,5 @@
 import AppIntents
+import OSLog
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -33,13 +34,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             UNNotificationCategory(identifier: "AGENT_QUESTION", actions: [answer, open], intentIdentifiers: []),
         ])
         Task { @MainActor in
-            if await center.notificationSettings().authorizationStatus == .authorized { application.registerForRemoteNotifications() }
+            if [.authorized, .provisional, .ephemeral].contains(await center.notificationSettings().authorizationStatus) {
+                application.registerForRemoteNotifications()
+            }
         }
         return true
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         model?.didRegister(deviceToken: deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        Logger(subsystem: "com.j4cku.agents", category: "push").error("No push token: \(error.localizedDescription, privacy: .public)")
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
@@ -101,6 +108,7 @@ struct RootView: View {
             if arguments.contains("-unlocked") { model.locked = false }
             if arguments.contains("-quietNotifications") {  // provisional: no prompt, so simctl push works unattended
                 _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge, .provisional])
+                UIApplication.shared.registerForRemoteNotifications()
             }
             if let index = arguments.firstIndex(of: "-session"), index + 1 < arguments.count {
                 model.pendingSession = arguments[index + 1]
