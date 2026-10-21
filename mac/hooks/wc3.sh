@@ -3,7 +3,7 @@
 #   wc3.sh hook    play a random line from ~/.claude/sounds/<theme>/<hook event>/, where <theme> is the
 #                  menu bar plugin's (~/.claude/agent-status/theme), else wc3
 #                  (SubagentStart: .../SubagentStart/<unit>/ for the agent's model, else .../SubagentStart/);
-#                  silent while the plugin's mute file says so
+#                  silent while the plugin's mute file says so, at the volume its menu sets
 #   wc3.sh agents  subagentStatusLine: each subagent row becomes the unit its model buys
 #   wc3.sh status  status line segment: the session's unit, and context window as food with WC3 upkeep
 # Voice packs: https://github.com/PeonPing/og-packs
@@ -11,6 +11,7 @@
 SOUNDS="$HOME/.claude/sounds"
 THEME="$HOME/.claude/agent-status/theme"
 MUTE="$HOME/.claude/agent-status/mute" # empty: muted until turned back on; an epoch: muted until then
+VOLUME="$HOME/.claude/agent-status/volume" # afplay's volume from the menu bar, 1 = the clip as recorded
 STATE="${TMPDIR:-/tmp}/claude-wc3"
 
 # Haiku is a Peon, Sonnet a Grunt, Opus a Far Seer, Fable the Pandaren Brewmaster.
@@ -36,14 +37,16 @@ muted() {
 
 play() {
   muted && return 0
-  local theme pack dir file
+  local theme pack dir file volume
   theme=$(cat "$THEME" 2>/dev/null)
   pack="$SOUNDS/${theme:-wc3}"
   [ -d "$pack" ] || pack="$SOUNDS/wc3"
   dir="$pack/$1"
   [ -d "$dir" ] || dir="${dir%/*}" # a unit without a voice of its own speaks with the event's
   file=$(find "$dir" -maxdepth 1 -type f \( -name '*.wav' -o -name '*.mp3' \) 2>/dev/null | sort -R | head -1)
-  [ -n "$file" ] && afplay "$file" &
+  volume=$(cat "$VOLUME" 2>/dev/null)
+  [[ "$volume" =~ ^[0-9]*\.?[0-9]+$ ]] || volume=1
+  [ -n "$file" ] && afplay -v "$volume" "$file" &
 }
 
 # Succeeds at most once per $2 seconds per key, so a fan-out of agents is one voice per unit type.

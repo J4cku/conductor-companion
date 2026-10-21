@@ -13,7 +13,8 @@ Conductor's database says which sessions are working, idle or unread, and with w
 ~/.claude/hooks/agent-status.sh writes add what only hooks see: a session blocked on you and the tool it is running.
 Sessions outside Conductor are known from their hook file alone.
 
-SwiftBar writes a clicked item's stdin= text back to this process: dismiss:<session>, clear, next, theme:<name>.
+SwiftBar writes a clicked item's stdin= text back to this process: dismiss:<session>, clear, next, theme:<name>,
+sound:<on|hour|morning|off>, volume:<level>.
 """
 import base64
 import math
@@ -34,6 +35,9 @@ SESSIONS = os.path.join(HOME, 'sessions')
 STATS = os.path.join(HOME, 'stats')
 THEME_FILE = os.path.join(HOME, 'theme')
 MUTE_FILE = os.path.join(HOME, 'mute')  # read by wc3.sh: empty = muted until turned back on, an epoch = muted until then
+VOLUME_FILE = os.path.join(HOME, 'volume')  # read by wc3.sh: afplay's volume, 1 = the clip as recorded
+SOUNDS_DIR = os.path.expanduser('~/.claude/sounds')
+VOLUMES = (('Loud', 1.0), ('Normal', 0.5), ('Quiet', 0.25), ('Whisper', 0.1))
 CONDUCTOR_DB = os.path.expanduser('~/Library/Application Support/com.conductor.app/conductor.db')
 
 QUIET_AFTER = 15 * 60  # outside Conductor nothing marks an interrupted turn, so a silent working session is presumed idle
@@ -481,6 +485,28 @@ def muted_until(now):
     return float(text) if float(text) > now else None
 
 
+def volume():
+    try:
+        with open(VOLUME_FILE) as f:
+            return float(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return 1.0
+
+
+def stop_sounds():
+    """Silences the clip playing right now, not just the next ones."""
+    subprocess.run(['/usr/bin/pkill', '-f', f'afplay .*{SOUNDS_DIR}/'], capture_output=True)
+
+
+def preview_volume(level):
+    """One line from the current theme at the new volume, so you hear what you picked."""
+    folder = os.path.join(SOUNDS_DIR, theme_key(), 'Stop')
+    clips = [os.path.join(folder, n) for n in os.listdir(folder) if n.endswith(('.wav', '.mp3'))] if os.path.isdir(folder) else []
+    if clips:
+        stop_sounds()
+        subprocess.Popen(['/usr/bin/afplay', '-v', str(level), clips[int(time.time()) % len(clips)]])
+
+
 def tomorrow_morning(now):
     t = time.localtime(now + 86400)
     return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 9, 0, 0, 0, 0, -1))
@@ -694,12 +720,15 @@ def render(sessions, now, tick):
     out += [line(f"--{t['name']}", f'stdin=theme:{key}', 'checked=true' if key == theme_key() else '') for key, t in THEMES.items()]
     silence = muted_until(now)
     out += [
-        'Sounds: on' if silence is None else 'Sounds: muted' if silence == 0 else f"Sounds: muted until {time.strftime('%a %H:%M', time.localtime(silence))}",
+        ('Sounds: on' + next((f' · {name.lower()}' for name, level in VOLUMES if level < 1 and abs(volume() - level) < 0.01), '')) if silence is None
+        else 'Sounds: muted' if silence == 0 else f"Sounds: muted until {time.strftime('%a %H:%M', time.localtime(silence))}",
         line('--On', 'stdin=sound:on', 'checked=true' if silence is None else ''),
         line('--Mute for 1 hour', 'stdin=sound:hour'),
         line('--Mute until tomorrow 9:00', 'stdin=sound:morning'),
         line('--Mute until I turn them on', 'stdin=sound:off', 'checked=true' if silence == 0 else ''),
+        '-----',
     ]
+    out += [line(f'--Volume: {name}', f'stdin=volume:{level}', 'checked=true' if abs(volume() - level) < 0.01 else '') for name, level in VOLUMES]
     return '\n'.join(out), top == 'working'
 
 
@@ -733,6 +762,12 @@ def handle(command, now):
         until = {'hour': f'{int(now) + 3600}', 'morning': f'{int(tomorrow_morning(now))}', 'off': ''}[arg]
         with open(MUTE_FILE, 'w') as f:
             f.write(until + '\n')
+        stop_sounds()
+    elif verb == 'volume' and arg in {str(level) for _, level in VOLUMES}:
+        with open(VOLUME_FILE, 'w') as f:
+            f.write(arg + '\n')
+        if muted_until(now) is None:
+            preview_volume(float(arg))
 
 
 def main():
