@@ -719,9 +719,12 @@ def render(sessions, now, tick):
     out.append('Theme')
     out += [line(f"--{t['name']}", f'stdin=theme:{key}', 'checked=true' if key == theme_key() else '') for key, t in THEMES.items()]
     silence = muted_until(now)
+    loudness = next((name.lower() for name, level in VOLUMES if abs(volume() - level) < 0.01), 'loud')
+    status = f'Playing · {loudness}' if silence is None else 'Muted' if silence == 0 else f"Muted until {time.strftime('%a %H:%M', time.localtime(silence))}"
     out += [
-        ('Sounds: on' + next((f' · {name.lower()}' for name, level in VOLUMES if level < 1 and abs(volume() - level) < 0.01), '')) if silence is None
-        else 'Sounds: muted' if silence == 0 else f"Sounds: muted until {time.strftime('%a %H:%M', time.localtime(silence))}",
+        'Sounds',  # fixed title: SwiftBar 2.1.1 greys out a submenu whose own title changes (fixed after it, swiftbar#518)
+        line(f'--{status}', 'size=11'),
+        '-----',
         line('--On', 'stdin=sound:on', 'checked=true' if silence is None else ''),
         line('--Mute for 1 hour', 'stdin=sound:hour'),
         line('--Mute until tomorrow 9:00', 'stdin=sound:morning'),
