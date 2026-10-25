@@ -31,6 +31,8 @@ every agent is doing, get a themed nudge when one needs you, and jump straight t
 - Clicking a session (or ⌃⌥W for the next one that needs you) opens it in Conductor.
 - Plan usage: Claude's 5-hour and weekly windows (the numbers `/usage` shows, read with Claude Code's own sign-in every
   5 minutes) and Codex's windows from its newest session log. A window past 80% also shows next to the menu bar icon.
+- The menu bar icon follows how full Claude's plan is (the fuller window): Poké → Great → Ultra → Master Ball at 40/70/90%,
+  a 1- to 7-star Dragon Ball (7 stars from 90%), or a Warcraft III coin warming from gold to red.
 
 ## Install
 

@@ -221,10 +221,12 @@ DRAGON = palette('#ffe9a8', '#ffb21a', '#e2700a', '#5a2400')
 KI = palette('#e8fbff', '#5ad1ff', '#1f7fe0', '#0b2a6b')
 RAGE = palette('#ffd0c0', '#ff5a3a', '#c01a10', '#3a0500')
 STEEL = palette('#f4f4f4', '#c9cdd2', '#8c9198', '#2b2f36')
+AMBER = palette('#ffe2a6', '#ffa31a', '#c46400', '#3a1c00')
+EMBER = palette('#ffc2a0', '#ff6a1f', '#b53800', '#2a0d00')
 
 
-def coin(rx):
-    return bevel(ellipse(rx, 6.5), GOLD, ellipse(rx - 2.4, 4.1) if rx > 3 else ())
+def coin(rx, pal=GOLD):
+    return bevel(ellipse(rx, 6.5), pal, ellipse(rx - 2.4, 4.1) if rx > 3 else ())
 
 
 def ki(pal):
@@ -251,12 +253,47 @@ def radar(blip):
     return img
 
 
-def dragon_ball():
-    return paint(sphere(DRAGON), STAR, rgb('#d42020'))
+def star_spots(n):
+    """Where an n-star Dragon Ball's stars go: a ring around the centre, the seventh in the middle."""
+    ring = min(n, 6)
+    radius = {2: 2.4, 3: 2.8, 4: 3.1, 5: 3.7, 6: 4.1, 7: 4.2}[n]
+    spots = [(round(7.5 + radius * math.cos(math.radians(-90 + 360 * k / ring + (45 if n == 4 else 0)))),
+              round(7.5 + radius * math.sin(math.radians(-90 + 360 * k / ring + (45 if n == 4 else 0))))) for k in range(ring)]
+    return spots + ([(8, 8)] if n == 7 else [])
+
+
+def dragon_ball(stars=1, glow=False):
+    """An n-star Dragon Ball; `glow` lights its rim, as when the radar finds it."""
+    img = sphere(DRAGON)
+    if glow:
+        paint(img, {(x, y) for y in range(N) for x in range(N) if img[y][x] == DRAGON[3]}, rgb('#fff36a'))
+    if stars == 1:
+        return paint(img, STAR, rgb('#d42020'))
+    plus = {(x + dx, y + dy) for x, y in star_spots(stars) for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1))}
+    return paint(img, plus, rgb('#d42020'))
 
 
 POKE_RED = palette('#ff8a70', '#e3350d', '#a3200a', '#1a1a1a')
 POKE_WHITE = palette('#ffffff', '#f0f0f0', '#bdbdbd', '#1a1a1a')
+GREAT_BLUE = palette('#8fb4ff', '#2f6fe0', '#1c449a', '#1a1a1a')
+ULTRA_BLACK = palette('#6a6a6a', '#2c2c2c', '#141414', '#1a1a1a')
+MASTER_PURPLE = palette('#c79bff', '#7e33c9', '#4e1585', '#1a1a1a')
+BALL_TOPS = {'poke': POKE_RED, 'great': GREAT_BLUE, 'ultra': ULTRA_BLACK, 'master': MASTER_PURPLE}
+
+
+def ball_marking(kind, u, v):
+    """The marks on a ball's top half, in its own (rotated) coordinates: Great Ball's red wings, Ultra Ball's yellow H,
+    Master Ball's pink bumps and white M."""
+    if kind == 'great' and abs(u) >= 3.3 and -4.6 < v < -1.6:
+        return POKE_RED[1]
+    if kind == 'ultra' and 1.5 <= abs(u) <= 2.9 and v < -1.0:
+        return rgb('#ffd21f')
+    if kind == 'master':
+        if math.hypot(abs(u) - 3.3, v + 2.6) < 1.15:
+            return rgb('#ff6fae')
+        if abs(u) < 1.6 and -4.8 < v < -2.9 and (abs(u) > 0.9 or v < -4.0 or abs(u) < 0.3):
+            return rgb('#ffffff')
+    return None
 BLACK = rgb('#1a1a1a')
 SPARKLE = rgb('#ffe14d')
 BUBBLE = mask([
@@ -288,8 +325,8 @@ BANG = mask([
 ])
 
 
-def pokeball(angle=0.0, shift=0.0, r=6.5, cx=7.5, cy=7.5):
-    """Poké Ball tilted by `angle` degrees, lit from the top left."""
+def pokeball(angle=0.0, shift=0.0, r=6.5, cx=7.5, cy=7.5, kind='poke'):
+    """Poké Ball (or Great, Ultra, Master Ball by `kind`) tilted by `angle` degrees, lit from the top left."""
     a = math.radians(angle)
     cx += shift
     lx, ly = cx - r * 0.4, cy - r * 0.4
@@ -307,9 +344,9 @@ def pokeball(angle=0.0, shift=0.0, r=6.5, cx=7.5, cy=7.5):
             elif hub < 2.5 or abs(v) < 0.8:
                 img[y][x] = BLACK
             else:
-                hi, base, lo, _ = POKE_RED if v < 0 else POKE_WHITE
+                hi, base, lo, _ = BALL_TOPS[kind] if v < 0 else POKE_WHITE
                 d = math.hypot(x - lx, y - ly) / r
-                img[y][x] = hi if d < 0.45 else base if d < 1.15 else lo
+                img[y][x] = (v < 0 and ball_marking(kind, u, v)) or (hi if d < 0.45 else base if d < 1.15 else lo)
             cells.add((x, y))
     return outline(img, cells, BLACK)
 
@@ -456,7 +493,15 @@ THEMES = {
         },
     },
 }
+# How full Claude's plan is (the fuller of its 5-hour and weekly windows) picks the icon: (from %, name, working frames).
+THEMES['wc3']['tiers'] = [(at, name, [coin(rx, pal) for rx in (6.5, 4.5, 1.5, 4.5)])
+                          for at, name, pal in ((0, 'No upkeep', GOLD), (50, 'Low upkeep', AMBER), (70, 'High upkeep', EMBER), (90, 'Out of gold', BLOOD))]
+THEMES['pkmn']['tiers'] = [(at, name, [pokeball(angle, shift, kind=kind) for angle, shift in ((0, 0), (-25, -0.6), (0, 0), (25, 0.6), (0, 0), (0, 0))])
+                           for at, name, kind in ((0, 'Poké Ball', 'poke'), (40, 'Great Ball', 'great'), (70, 'Ultra Ball', 'ultra'), (90, 'Master Ball', 'master'))]
+THEMES['dbz']['tiers'] = [(at, f'{stars}-star ball', [dragon_ball(stars, glow) for glow in (False, False, True, True)])
+                          for stars, at in zip(range(1, 8), (0, 15, 30, 45, 60, 75, 90))]
 for _theme in THEMES.values():
+    _theme['tiers'] = [(at, name, [png(f) for f in frames]) for at, name, frames in _theme['tiers']]
     _theme['icons']['quiet'] = grey(_theme['frames'][0])
     _theme['icons']['working'] = _theme['frames'][0]
     _theme['frames'] = [png(f) for f in _theme['frames']]
@@ -761,11 +806,20 @@ def usage_windows(now):
     return [('Claude', usage['claude'], 'https://claude.ai/settings/usage'), ('Codex', codex_usage(now), 'https://chatgpt.com/codex/settings/usage')]
 
 
-def usage_lines(now):
+def claude_tier(theme):
+    """The theme's icon tier for how full Claude's plan is, or None while that's unknown."""
+    if not usage['claude']:
+        return None
+    fullest = max(used for _, used, _ in usage['claude'])
+    return next(tier for tier in reversed(theme['tiers']) if fullest >= tier[0])
+
+
+def usage_lines(now, tier):
     out = []
     for name, windows, href in usage_windows(now):
         if windows:
             text = '    '.join(f'{label} {used:.0f}%' + (f' · resets {when(resets, now)}' if resets else '') for label, used, resets in windows)
+            text += f'    · {tier[1]}' if name == 'Claude' and tier else ''
             hot = max(used for _, used, _ in windows) >= WARN_AT
             out.append(line(f'{name}   {text}', f'href={href}', 'size=12', 'color=#c2410c,#fb923c' if hot else ''))
     return out
@@ -795,10 +849,12 @@ def render(sessions, now, tick):
     style = (f"color={theme['color']}", f"font={theme['font']}")
     counts = {state: sum(s.state == state for s in sessions) for state in ORDER}
     top = next((state for state in ORDER if counts[state] and state != 'quiet'), None)
+    tier = claude_tier(theme)
     if top is None:
-        icon = f"templateImage={theme['idle']}"
+        icon = f"image={tier[2][0]}" if tier else f"templateImage={theme['idle']}"
     elif top == 'working':
-        icon = f"image={theme['frames'][tick % len(theme['frames'])]}"
+        frames = tier[2] if tier else theme['frames']
+        icon = f"image={frames[tick % len(frames)]}"
     else:
         icon = f"image={theme['icons'][top]}"
     today = time.strftime('%Y-%m-%d', time.localtime(now))
@@ -810,7 +866,7 @@ def render(sessions, now, tick):
         '---',
         line(theme['resources'](tally(today, 'gold'), tally(today, 'lumber'), food), *style, 'size=13'),
         line(' · '.join(f"{counts[state]} {theme['labels'][state]}" for state in ORDER if counts[state]) or theme['empty'], 'size=12'),
-        *usage_lines(now),
+        *usage_lines(now, tier),
     ]
     for state in ORDER:
         group = [s for s in sessions if s.state == state]
