@@ -29,6 +29,8 @@ every agent is doing, get a themed nudge when one needs you, and jump straight t
 - Conductor's database says which sessions are working, idle or unread, and with which model.
 - The hook files add what only hooks see: a session blocked on you, and the tool it is running.
 - Clicking a session (or ⌃⌥W for the next one that needs you) opens it in Conductor.
+- Plan usage: Claude's 5-hour and weekly windows (the numbers `/usage` shows, read with Claude Code's own sign-in every
+  5 minutes) and Codex's windows from its newest session log. A window past 80% also shows next to the menu bar icon.
 
 ## Install
 

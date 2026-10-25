@@ -26,9 +26,12 @@ import sqlite3
 import struct
 import subprocess
 import sys
+import threading
 import time
+import urllib.request
 import zlib
 from collections import namedtuple
+from datetime import datetime
 
 HOME = os.path.expanduser('~/.claude/agent-status')
 SESSIONS = os.path.join(HOME, 'sessions')
@@ -51,6 +54,9 @@ DB_EVERY = 2.0
 FRAME = 0.3
 IDLE = 1.0
 NEXT_KEY = 'CTRL+OPTION+W'
+USAGE_EVERY = 300  # seconds between checks of Claude's plan usage
+WARN_AT = 80  # a usage window this full shows its percentage next to the menu bar icon
+CODEX_SESSIONS = os.path.expanduser('~/.codex/sessions')
 
 ORDER = ['waiting', 'failed', 'working', 'done', 'quiet']
 FINISHED = {'done', 'failed', 'quiet'}  # clicking one opens its workspace and turns it in
@@ -669,6 +675,102 @@ def md(text):
     return re.sub(r'([\\`*_\[\]<>#~])', r'\\\1', text.replace('|', '/'))
 
 
+usage = {'claude': None}  # filled by watch_claude_usage
+
+
+def fetch_claude_usage():
+    """Claude's 5-hour and weekly plan windows, from the endpoint Claude Code's /usage reads, signed in with Claude Code's own
+    Keychain token. Undocumented: if it changes or you're signed out, the menu just leaves the line out."""
+    raw = subprocess.run(['/usr/bin/security', 'find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+                         capture_output=True, text=True, timeout=10).stdout.strip()
+    token = (json.loads(raw).get('claudeAiOauth') or {}).get('accessToken') if raw else None
+    if not token:
+        return None
+    request = urllib.request.Request('https://api.anthropic.com/api/oauth/usage', headers={
+        'Authorization': f'Bearer {token}', 'anthropic-beta': 'oauth-2025-04-20', 'User-Agent': 'conductor-companion'})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        body = json.load(response)
+    windows = []
+    for key, label in (('five_hour', '5h'), ('seven_day', 'week')):
+        window = body.get(key) or {}
+        if window.get('utilization') is not None:
+            resets = datetime.fromisoformat(window['resets_at']).timestamp() if window.get('resets_at') else None
+            windows.append((label, float(window['utilization']), resets))
+    return windows or None
+
+
+def watch_claude_usage():
+    while True:
+        try:
+            usage['claude'] = fetch_claude_usage()
+        except Exception:  # offline, signed out or the endpoint changed: leave the line out rather than show stale numbers
+            usage['claude'] = None
+        time.sleep(USAGE_EVERY)
+
+
+def newest_codex_log():
+    """The most recently written Codex session log (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl), from the last two days' folders."""
+    days = []
+    for year in sorted(os.listdir(CODEX_SESSIONS))[-2:] if os.path.isdir(CODEX_SESSIONS) else []:
+        for month in sorted(os.listdir(os.path.join(CODEX_SESSIONS, year)))[-2:]:
+            days += [os.path.join(CODEX_SESSIONS, year, month, day) for day in sorted(os.listdir(os.path.join(CODEX_SESSIONS, year, month)))[-2:]]
+    logs = [entry for day in sorted(days)[-2:] for entry in os.scandir(day) if entry.name.endswith('.jsonl')]
+    return max(logs, key=lambda entry: entry.stat().st_mtime).path if logs else None
+
+
+def codex_usage(now):
+    """Codex's plan windows as its newest session log last reported them; a window that has since reset counts as empty."""
+    def look():
+        try:
+            path = newest_codex_log()
+            if not path:
+                return None
+            with open(path, 'rb') as f:
+                f.seek(max(0, os.path.getsize(path) - 262144))
+                tail = f.read().decode('utf-8', 'replace')
+        except OSError:
+            return None
+        limits = None
+        for raw in reversed(tail.splitlines()):
+            if '"rate_limits"' in raw:
+                try:
+                    limits = json.loads(raw)['payload']['rate_limits']
+                    break
+                except (ValueError, KeyError, TypeError):
+                    continue
+        windows = []
+        for key in ('primary', 'secondary'):
+            window = (limits or {}).get(key) or {}
+            if window.get('used_percent') is None:
+                continue
+            minutes = window.get('window_minutes') or 0
+            label = '5h' if minutes == 300 else 'week' if minutes == 10080 else f'{round(minutes / 60)}h'
+            resets = window.get('resets_at')
+            windows.append((label, float(window['used_percent']) if not resets or resets > now else 0.0, resets))
+        return windows or None
+    return cached('codex_usage', 60, look)
+
+
+def when(epoch, now):
+    if time.localtime(epoch)[:3] == time.localtime(now)[:3]:
+        return time.strftime('%H:%M', time.localtime(epoch))
+    return time.strftime('%a %H:%M' if epoch - now < 7 * 86400 else '%b %d', time.localtime(epoch))
+
+
+def usage_windows(now):
+    return [('Claude', usage['claude'], 'https://claude.ai/settings/usage'), ('Codex', codex_usage(now), 'https://chatgpt.com/codex/settings/usage')]
+
+
+def usage_lines(now):
+    out = []
+    for name, windows, href in usage_windows(now):
+        if windows:
+            text = '    '.join(f'{label} {used:.0f}%' + (f' · resets {when(resets, now)}' if resets else '') for label, used, resets in windows)
+            hot = max(used for _, used, _ in windows) >= WARN_AT
+            out.append(line(f'{name}   {text}', f'href={href}', 'size=12', 'color=#c2410c,#fb923c' if hot else ''))
+    return out
+
+
 def line(title, *params):
     return f"{title} | {' '.join(p for p in params if p)}"
 
@@ -701,11 +803,14 @@ def render(sessions, now, tick):
         icon = f"image={theme['icons'][top]}"
     today = time.strftime('%Y-%m-%d', time.localtime(now))
     food = max((s.context for s in sessions if s.state in ('working', 'waiting') and s.context is not None), default=None)
+    fullest = max((used for _, windows, _ in usage_windows(now) for _, used, _ in windows or []), default=0)
+    title = ' '.join(str(part) for part in (counts['working'] or '', f'{fullest:.0f}%' if fullest >= WARN_AT else '') if part)
     out = [
-        line(counts['working'] or '', icon, *style, 'dropdown=false'),
+        line(title, icon, *style, 'dropdown=false'),
         '---',
         line(theme['resources'](tally(today, 'gold'), tally(today, 'lumber'), food), *style, 'size=13'),
         line(' · '.join(f"{counts[state]} {theme['labels'][state]}" for state in ORDER if counts[state]) or theme['empty'], 'size=12'),
+        *usage_lines(now),
     ]
     for state in ORDER:
         group = [s for s in sessions if s.state == state]
@@ -777,6 +882,7 @@ def main():
     os.makedirs(SESSIONS, exist_ok=True)
     os.makedirs(STATS, exist_ok=True)
     prune_stats(time.time())
+    threading.Thread(target=watch_claude_usage, daemon=True).start()
     listening, last, tick = True, None, 0
     while True:
         now = time.time()
