@@ -493,13 +493,14 @@ THEMES = {
         },
     },
 }
-# How full Claude's plan is (the fuller of its 5-hour and weekly windows) picks the icon: (from %, name, working frames).
-THEMES['wc3']['tiers'] = [(at, name, [coin(rx, pal) for rx in (6.5, 4.5, 1.5, 4.5)])
-                          for at, name, pal in ((0, 'No upkeep', GOLD), (50, 'Low upkeep', AMBER), (70, 'High upkeep', EMBER), (90, 'Out of gold', BLOOD))]
-THEMES['pkmn']['tiers'] = [(at, name, [pokeball(angle, shift, kind=kind) for angle, shift in ((0, 0), (-25, -0.6), (0, 0), (25, 0.6), (0, 0), (0, 0))])
-                           for at, name, kind in ((0, 'Poké Ball', 'poke'), (40, 'Great Ball', 'great'), (70, 'Ultra Ball', 'ultra'), (90, 'Master Ball', 'master'))]
-THEMES['dbz']['tiers'] = [(at, f'{stars}-star ball', [dragon_ball(stars, glow) for glow in (False, False, True, True)])
-                          for stars, at in zip(range(1, 8), (0, 15, 30, 45, 60, 75, 90))]
+# How much of Claude's plan is left (of the fuller 5-hour or weekly window) picks the icon: the best ball while there's
+# plenty, down to the plainest as it runs out. Each tier: (from % left, name, working frames), best first.
+THEMES['wc3']['tiers'] = [(left, name, [coin(rx, pal) for rx in (6.5, 4.5, 1.5, 4.5)])
+                          for left, name, pal in ((50, 'No upkeep', GOLD), (30, 'Low upkeep', AMBER), (10, 'High upkeep', EMBER), (0, 'Out of gold', BLOOD))]
+THEMES['pkmn']['tiers'] = [(left, name, [pokeball(angle, shift, kind=kind) for angle, shift in ((0, 0), (-25, -0.6), (0, 0), (25, 0.6), (0, 0), (0, 0))])
+                           for left, name, kind in ((90, 'Master Ball', 'master'), (70, 'Ultra Ball', 'ultra'), (40, 'Great Ball', 'great'), (0, 'Poké Ball', 'poke'))]
+THEMES['dbz']['tiers'] = [(left, f'{stars}-star ball', [dragon_ball(stars, glow) for glow in (False, False, True, True)])
+                          for stars, left in zip(range(7, 0, -1), (90, 75, 60, 45, 30, 15, 0))]
 for _theme in THEMES.values():
     _theme['tiers'] = [(at, name, [png(f) for f in frames]) for at, name, frames in _theme['tiers']]
     _theme['icons']['quiet'] = grey(_theme['frames'][0])
@@ -807,11 +808,11 @@ def usage_windows(now):
 
 
 def claude_tier(theme):
-    """The theme's icon tier for how full Claude's plan is, or None while that's unknown."""
+    """The theme's icon tier for how much of Claude's plan is left, or None while that's unknown."""
     if not usage['claude']:
         return None
-    fullest = max(used for _, used, _ in usage['claude'])
-    return next(tier for tier in reversed(theme['tiers']) if fullest >= tier[0])
+    left = max(0.0, 100 - max(used for _, used, _ in usage['claude']))
+    return next(tier for tier in theme['tiers'] if left >= tier[0])
 
 
 def usage_lines(now, tier):
